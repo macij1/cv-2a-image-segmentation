@@ -1,6 +1,19 @@
 # Dataset
 myVOC4
 
+# Session summaries
+VA_Pr2A_ImageSegmentation_2025_2026/summaries/
+
+# DS_Store
+*.DS_Store
+
+ Data:
+ *npy
+ *zip
+ *target
+ *pth
+ 
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
