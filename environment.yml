@@ -1,0 +1,23 @@
+name: cv-seg-part4
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  # PyTorch (MPS support on Apple Silicon — no separate CUDA package needed)
+  - pytorch>=2.1
+  - torchvision>=0.16
+  - pip:
+    - tqdm
+    - numpy
+    - opencv-python
+    - matplotlib
+    - scikit-learn
+    - tifffile
+    - Pillow
+    - shapely
+    - natsort
+    - ipykernel
+    - jupyter
