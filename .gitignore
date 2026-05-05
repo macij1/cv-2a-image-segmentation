@@ -1,5 +1,16 @@
-# Dataset
+# Datasets
 myVOC4
+xBD_UC3M
+
+# Images and other results
+f0/
+f1/
+f2/
+f3/
+*activations/
+*predictions_multiclass/
+*.png, *.tar, *.pth, *.pth.tar, *.npy, *.csv  
+
 
 # Session summaries
 VA_Pr2A_ImageSegmentation_2025_2026/summaries/
