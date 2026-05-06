@@ -9,8 +9,12 @@ f2/
 f3/
 *activations/
 *predictions_multiclass/
-*.png, *.tar, *.pth, *.pth.tar, *.npy, *.csv  
-
+*.png
+*.tar
+*.pth
+*.pth.tar
+*.npy
+*.csv
 
 # Session summaries
 VA_Pr2A_ImageSegmentation_2025_2026/summaries/
@@ -18,12 +22,11 @@ VA_Pr2A_ImageSegmentation_2025_2026/summaries/
 # DS_Store
 *.DS_Store
 
- Data:
- *npy
- *zip
- *target
- *pth
- 
+# Data files
+*.npy
+*.zip
+*.target
+*.pth
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

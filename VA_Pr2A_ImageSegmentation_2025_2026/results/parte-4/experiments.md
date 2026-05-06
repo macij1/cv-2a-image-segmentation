@@ -350,6 +350,125 @@ Este problema tiene varias causas entrelazadas:
 
 ---
 
+## EXP-05 — DeepLabV3 R101 + Focal Loss + Aug — Damage Multiclass + ReduceLROnPlateau
+
+**Fecha**: 2026-05-06
+**Ruta del modelo**: `results/parte-4/exp05_deeplabv3_multiclass/deeplabv3_multiclass_exp05_best.pth.tar`
+**Ruta de resultados**: `results/parte-4/exp05_deeplabv3_multiclass/`
+
+### Configuración
+
+| Parámetro | Valor |
+|---|---|
+| Arquitectura | DeepLabV3 backbone ResNet-101 preentrenado (COCO) |
+| Tarea | Multiclase — 5 clases: background, no-damage, minor-damage, major-damage, destroyed |
+| patch\_size | 512 |
+| num\_classes | 5 |
+| batch\_size | 2 |
+| Optimizador | Adam lr=1e-4 |
+| LR scheduler | ReduceLROnPlateau (mode=max, factor=0.5, patience=4, min\_lr=1e-7) |
+| Épocas | 40 |
+| Augmentation | Flip H/V + Rot90 + Brillo/Contraste ±20% |
+| Loss | FocalLoss γ=2.0, α=[1.0, 4.0, 6.0, 6.0, 6.0] |
+| Normalización | ImageNet: mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225] |
+| Máscara | 255→0 (background), damage 0-3 → 1-4 |
+
+### Justificación del scheduler
+
+En EXP-04 el log de entrenamiento muestra que el modelo **seguía mejorando al finalizar la época 25**. El LR coseno decae a ~0 en T\_max épocas independientemente del estado real del modelo, lo que implica que en las últimas épocas — justo cuando el modelo debería estar refinando los detalles de borde — el gradiente efectivo es casi cero.
+
+Las redes neuronales presentan *spectral bias*: aprenden las componentes de baja frecuencia (regiones de edificios) antes que las de alta frecuencia (bordes precisos). Con coseno fijo el LR ya está al 50% en época 10, cuando el modelo aún aprende estructura gruesa. `ReduceLROnPlateau` mantiene el LR alto mientras hay mejora real y lo reduce de forma reactiva, actuando como un annealing adaptativo.
+
+### Resultados de entrenamiento
+
+| Época | Train Loss | Val Loss | Train Jaccard | Val Jaccard |
+|---|---|---|---|---|
+| 1  | 1.2724 | 1.8080 | 0.035 | 0.000 |
+| 3  | 1.0312 | 1.8088 | 0.100 | 0.143 |
+| 8  | 0.7711 | 1.5281 | 0.208 | 0.255 |
+| 15 | 0.6445 | 1.7326 | 0.243 | 0.261 |
+| 19 | 0.4961 | 2.1120 | 0.278 | 0.291 |
+| 23 | 0.4850 | 1.7480 | 0.287 | 0.277 ← LR reducido (×0.5) |
+| 30 | 0.3812 | 2.5196 | 0.334 | 0.301 |
+| 35 | 0.3723 | 2.2460 | 0.351 | 0.310 |
+| **39** | **0.3610** | **2.3783** | **0.346** | **0.317** ← mejor |
+| 40 | 0.3504 | 2.3340 | 0.356 | 0.310 |
+
+*ReduceLROnPlateau disparó una única reducción en la época 23. Val Loss extremadamente ruidosa (rango 1.37–2.56) durante todo el entrenamiento.*
+
+### Resultados de evaluación (test)
+
+| Clase | Jaccard test (MEAN) |
+|---|---|
+| no-damage (clase 1) | **0.395** |
+| minor-damage (clase 2) | 0.001 |
+| major-damage (clase 3) | 0.000 |
+| destroyed (clase 4) | 0.002 |
+| **Media 4 clases fg** | **0.099** |
+
+#### Desglose por tipo de desastre
+
+| Desastre | Jaccard no-damage | minor | major | destroyed |
+|---|---|---|---|---|
+| Hurricane  | 0.21 | 0.006 | 0.000 | 0.000 |
+| Earthquake | 0.50 | 0.000 | 0.000 | 0.000 |
+| Tsunami    | 0.44 | 0.000 | 0.000 | 0.006 |
+| Fire       | 0.55 | 0.000 | 0.000 | 0.000 |
+
+*Gráficos: `jaccard_per_disaster.png`, `confusion_matrices_per_disaster.png`.*
+
+### Análisis
+
+**El modelo colapsó a segmentación binaria.** Aprendió a detectar edificios sin daño (clase 1) con Jaccard 0.395 — comparable a EXP-04 en tarea binaria — pero ignoró completamente las clases de daño. El Jaccard combinado de las 4 clases de daño es 0.099, arrastrado casi exclusivamente por la clase 1.
+
+**Causas:**
+
+1. **Desbalanceo extremo**: en el subconjunto UC3M la gran mayoría de edificios están etiquetados como `no-damage`. Con α=[1.0, 4.0, 6.0, 6.0, 6.0] los pesos son insuficientes para compensar el volumen de píxeles de clase 1 frente a las clases de daño.
+
+2. **Métrica de validación engañosa**: `train_model` calcula el Jaccard promediando solo los labels presentes en cada batch. Como casi todos los patches tienen clase 1, la métrica reportada es esencialmente el Jaccard de clase 1. El modelo "mejoraba" constantemente en esta métrica, por lo que ReduceLROnPlateau solo disparó una reducción (época 23) y el entrenamiento no recibió señal de alarma.
+
+3. **Val Loss inestable**: oscila 1.37–2.56 sin tendencia clara; el conjunto de validación es demasiado pequeño y heterogéneo para dar una señal fiable.
+
+**Por tipo de desastre**: el modelo funciona mejor en earthquake (0.50) y fire (0.55), peor en hurricane (0.21). Los edificios de hurricane están frecuentemente bajo agua o lodo, con apariencia visual cercana al fondo, lo que dificulta la detección incluso de la clase no-damage.
+
+**Próximos pasos (EXP-06):**
+
+- Pesos α mucho más agresivos para las clases de daño (e.g. [1.0, 4.0, 20.0, 30.0, 30.0])
+- ASPP con tasas [6, 12, 18] en lugar de las default [12, 24, 36] (más adecuadas para output stride=16)
+- Pérdida auxiliar (`aux_classifier`) con peso 0.4×
+
+---
+
+## EXP-06 — Ideas a probar (pendiente de resultados EXP-05)
+
+### Idea 1: Ajuste de tasas atrous en el ASPP
+
+El `DeepLabHead` de torchvision usa por defecto tasas `[12, 24, 36]`, diseñadas para output stride 8. En nuestro setup el output stride es 16, por lo que las tasas efectivas en el espacio de la imagen son el doble de lo esperado, haciendo que las ramas del ASPP capturen contexto a escalas excesivamente grandes.
+
+En imágenes de satélite de xBD los edificios tienen tamaños típicos de 10-50px. Con tasas `[12, 24, 36]` a stride 16, los campos receptivos efectivos son ~200-600px — mucho más grandes que un edificio individual. Reducir a `[6, 12, 18]` centra el ASPP en escalas más relevantes:
+
+```python
+def get_deeplabv3_r101(num_classes):
+    model = deeplabv3_resnet101(weights=DeepLabV3_ResNet101_Weights.DEFAULT)
+    model.classifier     = DeepLabHead(2048, num_classes, atrous_rates=[6, 12, 18])
+    model.aux_classifier = FCNHead(1024, num_classes)
+    return model
+```
+
+### Idea 2: Supervisión auxiliar (aux\_classifier)
+
+DeepLabV3 incluye un `aux_classifier` conectado a `layer3` del backbone. En el entrenamiento actual solo se usa `outputs['out']`; la rama auxiliar existe pero no contribuye al gradiente.
+
+Añadir la pérdida auxiliar con peso 0.4× hace que los gradientes lleguen más profundo en el backbone durante las primeras épocas, cuando el LR es alto. Esto puede mejorar la calidad de las features intermedias para distinguir niveles de daño sutiles.
+
+```python
+loss = criterion(outputs['out'], masks) + 0.4 * criterion(outputs['aux'], masks)
+```
+
+Ambas ideas son de bajo coste (sin cambio de arquitectura ni de datos) y atacan problemas distintos: la idea 1 mejora la escala del contexto capturado, la idea 2 mejora la profundidad de la supervisión.
+
+---
+
 ## Plantilla para nuevos experimentos
 
 ```
