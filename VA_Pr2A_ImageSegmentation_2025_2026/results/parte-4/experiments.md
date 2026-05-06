@@ -467,6 +467,90 @@ loss = criterion(outputs['out'], masks) + 0.4 * criterion(outputs['aux'], masks)
 
 Ambas ideas son de bajo coste (sin cambio de arquitectura ni de datos) y atacan problemas distintos: la idea 1 mejora la escala del contexto capturado, la idea 2 mejora la profundidad de la supervisión.
 
+### Configuración
+
+| Parámetro | Valor |
+|---|---|
+| Arquitectura | DeepLabV3 backbone ResNet-101 preentrenado (COCO) |
+| Tarea | Multiclase — 5 clases: background, no-damage, minor-damage, major-damage, destroyed |
+| patch\_size | 512 |
+| num\_classes | 5 |
+| batch\_size | 2 |
+| Optimizador | Adam lr=1e-4 |
+| LR scheduler | ReduceLROnPlateau (mode=max, factor=0.5, patience=4, min\_lr=1e-7) |
+| Épocas | 40 |
+| Augmentation | Flip H/V + Rot90 + Brillo/Contraste ±20% |
+| Loss | FocalLoss γ=2.0, α=[1.0, 4.0, 20.0, 30.0, 30.0] |
+| Pérdida auxiliar | 0.4 × criterion(outputs['aux'], masks) |
+| ASPP rates | [6, 12, 18] (vs default [12, 24, 36]) |
+| Normalización | ImageNet: mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225] |
+
+### Resultados de entrenamiento
+
+| Época | Train Loss | Val Loss | Train Jaccard | Val Jaccard |
+|---|---|---|---|---|
+| 1  | 3.774 | 6.230  | 0.027 | 0.116 |
+| 5  | 2.897 | 6.686  | 0.092 | 0.055 |
+| 9  | 2.501 | 6.177  | 0.153 | 0.187 |
+| 14 | 1.836 | 7.775  | 0.222 | 0.239 |
+| 19 | 1.648 | 7.575  | 0.258 | 0.268 |
+| 25 | 1.499 | 11.908 | 0.277 | 0.284 |
+| **27** | **1.441** | **8.969**  | **0.274** | **0.287** ← mejor |
+| 31 | 1.381 | 12.223 | 0.291 | 0.274 ← LR↓ |
+| 35 | 1.135 | 13.685 | 0.304 | 0.267 ← LR↓ |
+| 39 | 1.007 | 14.756 | 0.313 | 0.278 ← LR↓ |
+| 40 | 1.011 | 15.165 | 0.326 | 0.252 |
+
+*ReduceLROnPlateau disparó 3 reducciones (épocas 31, 35, 39), señal de que el modelo alcanzó su techo a partir de la época 27. Val Loss muy superior a EXP-05 (rango 6–15 vs 1.3–2.5): los pesos α agresivos amplifican fuertemente cualquier error en clases de daño raras.*
+
+### Resultados de evaluación (test)
+
+| Clase | EXP-05 | EXP-06 | Δ |
+|---|---|---|---|
+| no-damage (clase 1)  | 0.395 | 0.351 | −0.044 |
+| minor-damage (clase 2) | 0.001 | 0.004 | +0.003 |
+| major-damage (clase 3) | 0.000 | 0.001 | +0.001 |
+| destroyed (clase 4)  | 0.002 | 0.011 | +0.009 |
+| **Media 4 clases fg** | **0.099** | **0.092** | −0.007 |
+
+#### Desglose por tipo de desastre
+
+| Desastre | no-damage | minor | major | destroyed |
+|---|---|---|---|---|
+| Hurricane  (13 img) | 0.093 | 0.021 | 0.002 | 0.000 |
+| Earthquake (20 img) | 0.484 | 0.000 | 0.000 | 0.000 |
+| Tsunami    (24 img) | 0.353 | 0.000 | 0.001 | 0.028 |
+| Fire       ( 6 img) | 0.460 | 0.000 | 0.000 | 0.005 |
+
+*Gráficos: `jaccard_per_disaster.png`, `confusion_matrices_per_disaster.png`.*
+
+### Análisis
+
+**Los pesos agresivos funcionan, pero el trade-off es adverso.** Las clases de daño mejoran: destroyed pasa de 0.002 a 0.011 (×5.5), minor de 0.001 a 0.004 (×4). Sin embargo, esto se consigue a costa de un modelo más agresivo que predice daño donde no lo hay, reduciendo el Jaccard de no-damage de 0.395 a 0.351 (−4.4pp). El balance neto es ligeramente negativo (media −0.007pp).
+
+**Donde sí se detecta daño — Tsunami.** Palu-tsunami es el único desastre donde el modelo detecta destroyed con Jaccard apreciable (media 0.028, imágenes individuales hasta 0.222). Los edificios destruidos por tsunami tienen una firma visual muy distinta: colapso total, escombros, proximidad al agua. Esta diferencia visual es suficientemente grande para que el modelo la capte con los pesos agresivos. En contraste, minor y major damage son cambios sutiles (grietas, daño parcial) que no producen diferencias de textura claras a escala de patch 512px.
+
+**Hurricane detecta minor damage.** Las imágenes de hurricane-matthew muestran Jaccard de minor-damage entre 0.01-0.05. Esto coincide con el hecho de que las inundaciones de Matthew dañaron tejados de manera visible (deformación, pérdida de material), con una textura diferente al estado intacto.
+
+**Val Loss desproporcionada.** El rango 6–15 (vs 1.3–2.5 en EXP-05) es consecuencia directa de α=[1.0, 4.0, 20.0, 30.0, 30.0]: un solo píxel destroyed predicho incorrectamente contribuye 30× más al loss que un píxel de fondo. Esto hace que la señal de validación sea extremadamente volátil (el número de píxeles de clase 3/4 en cada imagen de val varía de 0 a miles).
+
+**Sobre la ASPP con tasas [6, 12, 18].** La reducción de tasas puede haber contribuido a la caída en no-damage: con campos receptivos más pequeños, el modelo tiene menos contexto estructural para confirmar que una zona es un tejado intacto vs una superficie gris cualquiera. Para la detección de daño severo (destroyed), el campo receptivo menor no importa tanto porque el daño es local y visualmente obvio.
+
+**Desbalanceo de clases en el dataset xBD.** El desbalanceo entre clases de daño es estructural y varía enormemente según el tipo de desastre (ver `class_imbalance_per_disaster.png`):
+
+| Desastre | no-damage | minor | major | destroyed |
+|---|---|---|---|---|
+| Earthquake | 6 773 | 19 | 2 | 0 |
+| Tsunami | 21 398 | 0 | 283 | 778 |
+| Hurricane | 4 372 | 3 331 | 1 356 | 168 |
+| Tornado | 18 747 | 2 485 | 900 | 3 017 |
+| Wildfire | 5 060 | 4 | 11 | 452 |
+| Flood | 19 065 | 2 176 | 1 400 | 91 |
+
+El terremoto de México casi no tiene edificios dañados (21 instancias de minor/major sobre 6 773 no-damage, ratio 320:1), lo que explica por qué es el desastre donde el modelo falla de forma más contundente: el 99.7 % del área etiquetada pertenece a una única clase. En tsunami, la clase destroyed existe pero minor-damage está ausente (el tsunami produce o daño catastrófico o ausencia total, sin estadios intermedios detectables). El huracán es el único desastre con distribución razonablemente equilibrada entre las cuatro clases, lo que coincide con la detección de minor-damage observada experimentalmente.
+
+**Conclusión.** El problema fundamental del desbalanceo de clases en xBD no se resuelve solo con pesos de loss más agresivos. El modelo aprende a hacer predicciones más arriesgadas en damage classes pero no adquiere realmente la capacidad de discriminar los niveles de daño sutiles. Un enfoque más prometedor sería: (1) oversampling de patches que contienen daño, (2) pre-training o fine-tuning en un dataset con más diversidad de daño, o (3) formular el problema como detección de cambio pre/post en vez de segmentación post únicamente.
+
 ---
 
 ## Plantilla para nuevos experimentos
