@@ -1,0 +1,23 @@
+name: cv-seg-part4
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pytorch=2.5.1
+  - torchvision=0.20.1
+  - numpy
+  - matplotlib
+  - pillow
+  - scikit-learn
+  - scipy
+  - pyyaml
+  - tqdm
+  - pip
+  - pip:
+      - opencv-python
+      - shapely
+      - tifffile
+      - natsort
+      - jupyterlab
